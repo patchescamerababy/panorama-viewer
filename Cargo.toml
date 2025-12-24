@@ -1,0 +1,22 @@
+[package]
+name = "panorama_viewer"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "0.17"
+winit = "0.28"
+pollster = "0.3"
+bytemuck = { version = "1.14", features = ["derive"] }
+image = "0.24"
+env_logger = "0.10"
+rfd = "0.12"
+egui = "0.23"
+egui-wgpu = "0.23"
+egui-winit = "0.23"
+glam = "0.30.9"
+ab_glyph = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
