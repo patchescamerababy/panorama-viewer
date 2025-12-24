@@ -19,6 +19,9 @@ use std::{
     sync::RwLock,
 };
 
+// Embedded fallback for Release packaging (so i18n still works even if assets are not shipped)
+const EMBEDDED_I18N_JSON: &str = include_str!("../assets/i18n.json");
+
 #[derive(Debug, Clone)]
 pub struct I18n {
     map: HashMap<String, String>,
@@ -33,10 +36,14 @@ fn load_json_map(path: &Path) -> Option<HashMap<String, String>> {
     Some(map)
 }
 
+fn load_multi_lang_from_str(text: &str, lang: &str) -> Option<HashMap<String, String>> {
+    let all: HashMap<String, HashMap<String, String>> = serde_json::from_str(text).ok()?;
+    all.get(lang).cloned()
+}
+
 fn load_multi_lang_json(path: &Path, lang: &str) -> Option<HashMap<String, String>> {
     let text = std::fs::read_to_string(path).ok()?;
-    let all: HashMap<String, HashMap<String, String>> = serde_json::from_str(&text).ok()?;
-    all.get(lang).cloned()
+    load_multi_lang_from_str(&text, lang)
 }
 
 /// Find assets/i18n/<lang>.json by searching:
@@ -84,18 +91,23 @@ fn find_multi_lang_file() -> Option<PathBuf> {
 }
 
 fn load_lang(lang: &str) -> HashMap<String, String> {
-    // First try per-lang file
+    // 1) Try per-lang file
     if let Some(p) = find_lang_file(lang) {
         if let Some(m) = load_json_map(&p) {
             return m;
         }
     }
 
-    // Then try single multi-lang file
+    // 2) Try external single multi-lang file (preferred if present, allows customization)
     if let Some(p) = find_multi_lang_file() {
         if let Some(m) = load_multi_lang_json(&p, lang) {
             return m;
         }
+    }
+
+    // 3) Fallback to embedded i18n.json (works in Release even without shipping assets)
+    if let Some(m) = load_multi_lang_from_str(EMBEDDED_I18N_JSON, lang) {
+        return m;
     }
 
     HashMap::new()
