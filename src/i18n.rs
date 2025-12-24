@@ -21,8 +21,6 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct I18n {
-    pub lang: String,
-    fallback_lang: String,
     map: HashMap<String, String>,
     fallback_map: HashMap<String, String>,
 }
@@ -106,21 +104,16 @@ fn load_lang(lang: &str) -> HashMap<String, String> {
 /// Initialize global i18n. Safe to call multiple times; later calls overwrite current lang maps.
 pub fn init(lang: impl Into<String>) {
     let lang = lang.into();
-    let fallback_lang = "zh-Hans".to_string();
+    let fallback_lang = "zh-Hans";
 
     let map = load_lang(&lang);
     let fallback_map = if lang == fallback_lang {
         map.clone()
     } else {
-        load_lang(&fallback_lang)
+        load_lang(fallback_lang)
     };
 
-    let i = I18n {
-        lang,
-        fallback_lang,
-        map,
-        fallback_map,
-    };
+    let i = I18n { map, fallback_map };
 
     if let Some(lock) = I18N.get() {
         if let Ok(mut w) = lock.write() {
