@@ -1,0 +1,123 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]          # 只在 master 上持续集成
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# —————————————————— 1️⃣  Build —————————————————— #
+jobs:
+  build:
+    name: Build (${{ matrix.artifact_name }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # —— Windows —— #
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x86_64
+          # —— Linux —— #
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+          # —— macOS —— #
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: macos-aarch64
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # 安装 stable Rust
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      # 添加交叉编译目标
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      # Release 构建
+      - name: Cargo build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # 压缩产物
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          zip -j "dist/jni-${{ matrix.artifact_name }}.zip" \
+              target/${{ matrix.target }}/release/panorama_viewer \
+              target/${{ matrix.target }}/release/*.exe \
+              target/${{ matrix.target }}/release/*.dll \
+              target/${{ matrix.target }}/release/*.so \
+              target/${{ matrix.target }}/release/*.dylib \
+              target/${{ matrix.target }}/release/*.lib 2>/dev/null || true
+
+      # 上传产物供后续 Release 使用
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jni-${{ matrix.artifact_name }}
+          path: dist/jni-${{ matrix.artifact_name }}.zip
+          retention-days: 30   # 仅作为中转，30 天够用
+
+# —————————————————— 2️⃣  Release —————————————————— #
+  release:
+    name: Tag & Release
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0                # 必须取完整历史才能打 tag
+
+      # 1) 下载所有产物
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # 2) 生成 vYYYY-MM-DD
+      - name: Set release date
+        id: date
+        run: |
+          echo "RELEASE_DATE=$(date -u +'%Y-%m-%d')" >>"$GITHUB_OUTPUT"
+
+      # 3) 创建并推送 tag
+      - name: Create & push tag
+        env:
+          TAG_NAME: v${{ steps.date.outputs.RELEASE_DATE }}   # 没有连字符
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name  "github-actions[bot]"
+          git tag "${TAG_NAME}"
+          git push origin "${TAG_NAME}"
+
+      # 4) 建 Release 并上传全部产物
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.date.outputs.RELEASE_DATE }}
+          name: Release v${{ steps.date.outputs.RELEASE_DATE }}
+          body: |
+            **自动发布**  
+            - 基于 commit `${{ github.sha }}`  
+            - 生成时间 (UTC)：${{ steps.date.outputs.RELEASE_DATE }}
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
