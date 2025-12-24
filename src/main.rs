@@ -13,25 +13,25 @@ use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::*,
     event_loop::{ControlFlow, EventLoop},
-    window::{WindowBuilder, Fullscreen},
+    window::{Fullscreen, WindowBuilder},
 };
 
-use std::sync::Arc;
-use std::path::PathBuf;
-use std::time::Instant;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
 use image::io::Reader as ImageReader;
 use image::GenericImageView;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+use std::thread;
+use std::time::Instant;
 
 fn main() {
     // env_logger::init(); // 在 Windows Subsystem 下标准输出不可见，可以考虑写入文件日志
 
     // i18n
-    let lang = crate::i18n::resolve_lang_from_args();
-    crate::i18n::init(lang);
+    let mut current_lang = crate::i18n::resolve_lang_from_args();
+    crate::i18n::init(current_lang.clone());
 
     let event_loop = EventLoop::new();
     let window = Arc::new(
@@ -39,17 +39,17 @@ fn main() {
             .with_title(&crate::i18n::tr("app.title"))
             .with_inner_size(LogicalSize::new(1280, 720))
             .build(&event_loop)
-            .unwrap()
-    ); 
+            .unwrap(),
+    );
 
     // Renderer 初始化不再需要 Mesh，改用全屏 Ray Casting
     let mut renderer = pollster::block_on(Renderer::new(window.clone()));
     let mut viewer = PanoramaViewer3D::new();
-    
+
     // 交互状态
     let mut mouse_pressed = false;
     let mut last_mouse_pos: Option<PhysicalPosition<f64>> = None;
-    
+
     // FPS 计算
     let mut last_frame_time = Instant::now();
     let mut frame_count = 0;
@@ -65,7 +65,7 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
-        
+
         // 检查是否有新加载的图片
         if let Ok(rgba) = rx.try_recv() {
             renderer.load_panorama(rgba);
@@ -94,13 +94,16 @@ fn main() {
                         if input.state == ElementState::Pressed {
                             match input.virtual_keycode {
                                 Some(VirtualKeyCode::O) => {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter(&crate::i18n::tr("file.filter.images"), &["jpg", "jpeg", "png", "bmp"])
-                                    .pick_file()
-                                {
-                                    is_loading = true;
-                                    start_load_image(path, tx.clone());
-                                }
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter(
+                                            &crate::i18n::tr("file.filter.images"),
+                                            &["jpg", "jpeg", "png", "bmp"],
+                                        )
+                                        .pick_file()
+                                    {
+                                        is_loading = true;
+                                        start_load_image(path, tx.clone());
+                                    }
                                 }
                                 Some(VirtualKeyCode::F11) => {
                                     viewer.is_fullscreen = !viewer.is_fullscreen;
@@ -130,18 +133,11 @@ fn main() {
                             if let Some(last_pos) = last_mouse_pos {
                                 let dx = (position.x - last_pos.x) as f32;
                                 let dy = (position.y - last_pos.y) as f32;
-                                
-                                // 旋转逻辑
+
                                 let width = renderer.size.width as f32;
                                 let height = renderer.size.height as f32;
-                                
+
                                 if width > 0.0 && height > 0.0 {
-                                    // 对齐 JavaFX 版本的拖拽映射：
-                                    // vF = fov(垂直)；hF = 2 * atan(tan(vF/2) * aspect)
-                                    // yaw += dx/width * hF；pitch -= dy/height * vF
-                                    //
-                                    // 说明：这里保留当前 Rust 的方向约定（yaw -=、pitch -=），
-                                    // 只把“每像素角度”改成和 Java 一致的计算方式，保证不同 FOV 下手感稳定。
                                     let v_f = viewer.fov.to_radians();
                                     let aspect = width / height;
                                     let h_f = 2.0 * ((v_f / 2.0).tan() * aspect).atan();
@@ -150,7 +146,8 @@ fn main() {
                                     let pitch_per_px_deg = (v_f / height).to_degrees();
 
                                     viewer.yaw -= dx * yaw_per_px_deg * viewer.sensitivity_scale;
-                                    viewer.pitch = (viewer.pitch - dy * pitch_per_px_deg * viewer.sensitivity_scale)
+                                    viewer.pitch = (viewer.pitch
+                                        - dy * pitch_per_px_deg * viewer.sensitivity_scale)
                                         .clamp(-90.0, 90.0);
                                 }
                             }
@@ -163,15 +160,17 @@ fn main() {
                             MouseScrollDelta::LineDelta(_, y) => y,
                             MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
                         };
-                        // 不同的投影模式可能有不同的 FOV 限制
-                        let min_fov =
-                            if viewer.projection_mode == ProjectionMode::Stereographic { 10.0 } else { 5.0 };
 
-                        // 允许更大的 FOV（最大可到 180°）。注意：Rectilinear/Pannini/Architectural 在 shader 里用到了
-                        // tan(fov/2)，严格的 180° 会落在 tan(90°) 奇点；因此这里只把它们放宽到 179.9°，
-                        // 其它模式可到 180°。
+                        let min_fov = if viewer.projection_mode == ProjectionMode::Stereographic {
+                            10.0
+                        } else {
+                            5.0
+                        };
+
                         let max_fov = match viewer.projection_mode {
-                            ProjectionMode::Rectilinear | ProjectionMode::Pannini | ProjectionMode::Architectural => 179.9,
+                            ProjectionMode::Rectilinear
+                            | ProjectionMode::Pannini
+                            | ProjectionMode::Architectural => 179.9,
                             _ => 180.0,
                         };
 
@@ -203,7 +202,17 @@ fn main() {
                 // 渲染 UI 和 场景
                 let mut next_image = None;
                 let render_result = renderer.render_with_ui(&window, |ctx| {
-                    draw_ui(ctx, &mut viewer, &mut next_image, &mut show_fps, &mut vsync_enabled, fps, is_loading, &window);
+                    draw_ui(
+                        ctx,
+                        &mut viewer,
+                        &mut next_image,
+                        &mut show_fps,
+                        &mut vsync_enabled,
+                        fps,
+                        is_loading,
+                        &window,
+                        &mut current_lang,
+                    );
                 });
 
                 if let Some(path) = next_image {
@@ -230,13 +239,18 @@ fn main() {
 
 fn start_load_image(path: PathBuf, tx: Sender<image::RgbaImage>) {
     thread::spawn(move || {
-        println!("{}", crate::i18n::tr_with("log.loading_image_bg", &[("path", format!("{:?}", path))]));
-        
-        // 使用 BufReader 优化 IO 读取性能
+        println!(
+            "{}",
+            crate::i18n::tr_with("log.loading_image_bg", &[("path", format!("{:?}", path))])
+        );
+
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("{}", crate::i18n::tr_with("error.open_file", &[("err", format!("{}", e))]));
+                eprintln!(
+                    "{}",
+                    crate::i18n::tr_with("error.open_file", &[("err", format!("{}", e))])
+                );
                 return;
             }
         };
@@ -246,7 +260,6 @@ fn start_load_image(path: PathBuf, tx: Sender<image::RgbaImage>) {
             .with_guessed_format()
             .map_err(image::ImageError::IoError)
             .and_then(|mut r| {
-                // 移除图片尺寸限制，允许加载任意大小的图片到内存
                 r.no_limits();
                 r.decode()
             });
@@ -261,37 +274,40 @@ fn start_load_image(path: PathBuf, tx: Sender<image::RgbaImage>) {
                         &[("w", w.to_string()), ("h", h.to_string())]
                     )
                 );
-                
-                // 直接转换为 RGBA8 格式，不做任何缩放
+
                 let rgba = img.to_rgba8();
                 if tx.send(rgba).is_err() {
                     eprintln!("{}", crate::i18n::tr("error.send_to_main_failed"));
                 }
-            },
-            Err(e) => eprintln!("{}", crate::i18n::tr_with("error.decode_image", &[("err", format!("{}", e))])),
+            }
+            Err(e) => eprintln!(
+                "{}",
+                crate::i18n::tr_with("error.decode_image", &[("err", format!("{}", e))])
+            ),
         }
     });
 }
 
 fn draw_ui(
-    ctx: &egui::Context, 
-    viewer: &mut PanoramaViewer3D, 
+    ctx: &egui::Context,
+    viewer: &mut PanoramaViewer3D,
     next_image: &mut Option<PathBuf>,
     show_fps: &mut bool,
     vsync_enabled: &mut bool,
     fps: f32,
     is_loading: bool,
     window: &winit::window::Window,
+    current_lang: &mut String,
 ) {
-    // 自动隐藏 UI 逻辑可以这里添加，这里先保持常驻
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
+            // File
             ui.menu_button(&crate::i18n::tr("menu.file"), |ui| {
                 if ui.button(&crate::i18n::tr("menu.open_image")).clicked() {
                     ui.close_menu();
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter(&crate::i18n::tr("file.filter.images"), &["jpg", "jpeg", "png", "bmp"])
-                        .pick_file() 
+                        .pick_file()
                     {
                         *next_image = Some(path);
                     }
@@ -301,16 +317,23 @@ fn draw_ui(
                 }
             });
 
+            // View
             ui.menu_button(&crate::i18n::tr("menu.view"), |ui| {
                 if ui.button(&crate::i18n::tr("view.reset")).clicked() {
                     viewer.yaw = 0.0;
                     viewer.pitch = 0.0;
-                    viewer.fov = 46.8; // 50mm 默认视角（与 Java 版一致）
+                    viewer.fov = 46.8;
                     ui.close_menu();
                 }
-                
-                // 全屏切换
-                if ui.button(if viewer.is_fullscreen { crate::i18n::tr("view.fullscreen.exit") } else { crate::i18n::tr("view.fullscreen.enter") }).clicked() {
+
+                if ui
+                    .button(if viewer.is_fullscreen {
+                        crate::i18n::tr("view.fullscreen.exit")
+                    } else {
+                        crate::i18n::tr("view.fullscreen.enter")
+                    })
+                    .clicked()
+                {
                     viewer.is_fullscreen = !viewer.is_fullscreen;
                     if viewer.is_fullscreen {
                         window.set_fullscreen(Some(Fullscreen::Borderless(None)));
@@ -322,27 +345,110 @@ fn draw_ui(
 
                 ui.separator();
                 ui.menu_button(&crate::i18n::tr("view.projection_mode"), |ui| {
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Rectilinear, crate::i18n::tr("projection.rectilinear")).clicked() { ui.close_menu(); }
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Equidistant, crate::i18n::tr("projection.equidistant")).clicked() { ui.close_menu(); }
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Stereographic, crate::i18n::tr("projection.stereographic")).clicked() { ui.close_menu(); }
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Pannini, crate::i18n::tr("projection.pannini")).clicked() { ui.close_menu(); }
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Architectural, crate::i18n::tr("projection.architectural")).clicked() { ui.close_menu(); }
-                    if ui.radio_value(&mut viewer.projection_mode, ProjectionMode::Equirectangular, crate::i18n::tr("projection.equirectangular")).clicked() { ui.close_menu(); }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Rectilinear,
+                            crate::i18n::tr("projection.rectilinear"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Equidistant,
+                            crate::i18n::tr("projection.equidistant"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Stereographic,
+                            crate::i18n::tr("projection.stereographic"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Pannini,
+                            crate::i18n::tr("projection.pannini"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Architectural,
+                            crate::i18n::tr("projection.architectural"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
+                    if ui
+                        .radio_value(
+                            &mut viewer.projection_mode,
+                            ProjectionMode::Equirectangular,
+                            crate::i18n::tr("projection.equirectangular"),
+                        )
+                        .clicked()
+                    {
+                        ui.close_menu();
+                    }
                 });
 
                 ui.separator();
                 ui.menu_button(&crate::i18n::tr("view.input_sensitivity"), |ui| {
-                     ui.add(egui::Slider::new(&mut viewer.sensitivity_scale, 0.1..=5.0).text(crate::i18n::tr("view.multiplier")));
-                     if ui.button(&crate::i18n::tr("view.reset_1_0")).clicked() {
-                         viewer.sensitivity_scale = 1.0;
-                     }
+                    ui.add(
+                        egui::Slider::new(&mut viewer.sensitivity_scale, 0.1..=5.0)
+                            .text(crate::i18n::tr("view.multiplier")),
+                    );
+                    if ui.button(&crate::i18n::tr("view.reset_1_0")).clicked() {
+                        viewer.sensitivity_scale = 1.0;
+                    }
                 });
+
                 ui.separator();
                 if ui.checkbox(show_fps, crate::i18n::tr("view.show_fps")).clicked() {
                     ui.close_menu();
                 }
-                if ui.checkbox(vsync_enabled, crate::i18n::tr("view.enable_vsync")).clicked() {
-                     // TODO: Reconfigure
+                if ui
+                    .checkbox(vsync_enabled, crate::i18n::tr("view.enable_vsync"))
+                    .clicked()
+                {
+                    // TODO: Reconfigure
+                }
+            });
+
+            // Language
+            ui.menu_button(&crate::i18n::tr("menu.language"), |ui| {
+                let langs: [(&str, &str); 8] = [
+                    ("zh-Hans", "简体中文"),
+                    ("zh-Hant", "繁體中文"),
+                    ("en", "English"),
+                    ("ja", "日本語"),
+                    ("ko", "한국어"),
+                    ("fr", "Français"),
+                    ("ru", "Русский"),
+                    ("ar", "العربية"),
+                ];
+
+                for (code, name) in langs {
+                    if ui.radio_value(current_lang, code.to_string(), name).clicked() {
+                        crate::i18n::init(current_lang.clone());
+                        window.set_title(&crate::i18n::tr("app.title"));
+                        ui.close_menu();
+                    }
                 }
             });
         });
@@ -351,20 +457,26 @@ fn draw_ui(
     egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
             if is_loading {
-                ui.label(egui::RichText::new(crate::i18n::tr("status.loading_image")).color(egui::Color32::YELLOW));
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr("status.loading_image"))
+                        .color(egui::Color32::YELLOW),
+                );
                 ui.label("|");
             }
 
-            ui.label(format!("{} {:?}", crate::i18n::tr("status.mode_prefix"), viewer.projection_mode));
+            ui.label(format!(
+                "{} {:?}",
+                crate::i18n::tr("status.mode_prefix"),
+                viewer.projection_mode
+            ));
             ui.label("|");
             ui.label(format!("FOV: {:.1}°", viewer.fov));
             ui.label("|");
-            // 计算 35mm 全画幅等效焦距（假设 viewer.fov 表示对角视角）
+
             {
                 let fov_deg = viewer.fov.clamp(0.01, 179.9);
                 let fov_rad = fov_deg.to_radians();
-                // 35mm 全画幅对角线 (36x24 mm)
-                let full_frame_diag = ((36.0f32 * 36.0f32) + (24.0f32 * 24.0f32)).sqrt(); // ≈ 43.2666 mm
+                let full_frame_diag = ((36.0f32 * 36.0f32) + (24.0f32 * 24.0f32)).sqrt();
                 let equiv_focal = full_frame_diag / (2.0 * (fov_rad * 0.5).tan());
                 ui.label(format!(
                     "{} {:.1}mm",
@@ -372,14 +484,17 @@ fn draw_ui(
                     equiv_focal
                 ));
             }
+
             ui.label("|");
             ui.label(format!("Yaw: {:.1}°", viewer.yaw));
             ui.label("|");
             ui.label(format!("Pitch: {:.1}°", viewer.pitch));
-            
+
             if *show_fps {
                 ui.label("|");
-                ui.label(egui::RichText::new(format!("FPS: {:.1}", fps)).color(egui::Color32::GREEN));
+                ui.label(
+                    egui::RichText::new(format!("FPS: {:.1}", fps)).color(egui::Color32::GREEN),
+                );
             }
         });
     });
