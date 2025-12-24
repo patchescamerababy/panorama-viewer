@@ -99,7 +99,7 @@ jobs:
             exit 1
           fi
 
-          zip -j "dist/jni-${{ matrix.artifact_name }}.zip" "${files[@]}"
+          zip -j "dist/${{ matrix.artifact_name }}.zip" "${files[@]}"
 
       # —— 打包：Windows 用 Compress-Archive —— #
       - name: Package (Windows)
@@ -126,7 +126,7 @@ jobs:
             if ($items) { $files += $items.FullName }
           }
 
-          $zipPath = "dist\jni-${{ matrix.artifact_name }}.zip"
+          $zipPath = "dist\${{ matrix.artifact_name }}.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
           Compress-Archive -Path $files -DestinationPath $zipPath -Force
 
@@ -134,8 +134,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jni-${{ matrix.artifact_name }}
-          path: dist/jni-${{ matrix.artifact_name }}.zip
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}.zip
           retention-days: 30
 
   # —————————————————— 2️⃣  Release —————————————————— #
