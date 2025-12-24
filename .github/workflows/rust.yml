@@ -2,18 +2,22 @@ name: Rust
 
 on:
   push:
-    branches: [ main ]          # 只在 master 上持续集成
+    branches: [ main ]
   pull_request:
     branches: [ main ]
     paths:
-      - 'src/*'
+      - 'src/**'
       - '.github/workflows/rust.yml'
 
 env:
   CARGO_TERM_COLOR: always
 
-# —————————————————— 1️⃣  Build —————————————————— #
+# 需要推 tag + 发 Release
+permissions:
+  contents: write
+
 jobs:
+  # —————————————————— 1️⃣  Build —————————————————— #
   build:
     name: Build (${{ matrix.artifact_name }})
     runs-on: ${{ matrix.os }}
@@ -22,52 +26,109 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # —— Windows —— #
+          # —— Windows x64 —— #
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: windows-x86_64
-          # —— Linux —— #
+
+          # —— Windows ARM64 —— #
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact_name: windows-aarch64
+
+          # —— Linux x64 —— #
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64
-          # —— macOS —— #
-          - os: macos-latest
+
+          # —— Linux ARM64 —— #
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: linux-aarch64
+
+          # —— macOS x86_64 —— #
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: macos-x86_64
+
+          # —— macOS ARM64 —— #
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: macos-aarch64
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # 安装 stable Rust
-      - uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          targets: ${{ matrix.target }}
 
-      # 添加交叉编译目标
-      - name: Add target
-        run: rustup target add ${{ matrix.target }}
+      # Linux 依赖：glib-sys 需要 glib-2.0.pc（libglib2.0-dev）+ pkg-config
+      - name: Install Linux deps (glib)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libglib2.0-dev zip
 
       # Release 构建
       - name: Cargo build
         run: cargo build --release --target ${{ matrix.target }}
 
-      # 压缩产物
-      - name: Package
+      # —— 打包：Linux/macOS 用 zip —— #
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          zip -j "dist/jni-${{ matrix.artifact_name }}.zip" \
-              target/${{ matrix.target }}/release/panorama_viewer \
-              target/${{ matrix.target }}/release/*.exe \
-              target/${{ matrix.target }}/release/*.dll \
-              target/${{ matrix.target }}/release/*.so \
-              target/${{ matrix.target }}/release/*.dylib \
-              target/${{ matrix.target }}/release/*.lib 2>/dev/null || true
+          rel="target/${{ matrix.target }}/release"
+
+          shopt -s nullglob
+          files=()
+          # 主二进制（按你原来的命名）
+          files+=("$rel/panorama_viewer")
+          # 可能存在的动态库/静态库
+          files+=("$rel/"*.so "$rel/"*.dylib "$rel/"*.a "$rel/"*.rlib "$rel/"*.lib)
+
+          # 过滤掉不存在的（nullglob 已处理，但 panorama_viewer 可能缺失则这里显式判断）
+          if [ ! -f "$rel/panorama_viewer" ]; then
+            echo "ERROR: expected binary not found: $rel/panorama_viewer"
+            ls -la "$rel" || true
+            exit 1
+          fi
+
+          zip -j "dist/jni-${{ matrix.artifact_name }}.zip" "${files[@]}"
+
+      # —— 打包：Windows 用 Compress-Archive —— #
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $rel = "target\${{ matrix.target }}\release"
+
+          $bin = Join-Path $rel "panorama_viewer.exe"
+          if (!(Test-Path $bin)) {
+            Write-Host "ERROR: expected binary not found: $bin"
+            Get-ChildItem -Force $rel | Format-Table -AutoSize
+            exit 1
+          }
+
+          $files = @()
+          $files += $bin
+
+          # 常见库文件（存在就打包）
+          $patterns = @("*.dll","*.lib","*.pdb")
+          foreach ($p in $patterns) {
+            $items = Get-ChildItem -Path $rel -Filter $p -File -ErrorAction SilentlyContinue
+            if ($items) { $files += $items.FullName }
+          }
+
+          $zipPath = "dist\jni-${{ matrix.artifact_name }}.zip"
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          Compress-Archive -Path $files -DestinationPath $zipPath -Force
 
       # 上传产物供后续 Release 使用
       - name: Upload artifact
@@ -75,19 +136,19 @@ jobs:
         with:
           name: jni-${{ matrix.artifact_name }}
           path: dist/jni-${{ matrix.artifact_name }}.zip
-          retention-days: 30   # 仅作为中转，30 天够用
+          retention-days: 30
 
-# —————————————————— 2️⃣  Release —————————————————— #
+  # —————————————————— 2️⃣  Release —————————————————— #
   release:
     name: Tag & Release
     needs: build
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0                # 必须取完整历史才能打 tag
+          fetch-depth: 0
 
       # 1) 下载所有产物
       - name: Download artifacts
@@ -101,15 +162,22 @@ jobs:
         run: |
           echo "RELEASE_DATE=$(date -u +'%Y-%m-%d')" >>"$GITHUB_OUTPUT"
 
-      # 3) 创建并推送 tag
-      - name: Create & push tag
+      # 3) 创建并推送 tag（若已存在则跳过创建）
+      - name: Create & push tag (if missing)
         env:
-          TAG_NAME: v${{ steps.date.outputs.RELEASE_DATE }}   # 没有连字符
+          TAG_NAME: v${{ steps.date.outputs.RELEASE_DATE }}
         run: |
+          set -euo pipefail
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name  "github-actions[bot]"
-          git tag "${TAG_NAME}"
-          git push origin "${TAG_NAME}"
+
+          git fetch --tags
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists, skipping tag creation."
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
 
       # 4) 建 Release 并上传全部产物
       - name: Publish GitHub Release
@@ -118,8 +186,8 @@ jobs:
           tag_name: v${{ steps.date.outputs.RELEASE_DATE }}
           name: Release v${{ steps.date.outputs.RELEASE_DATE }}
           body: |
-            **自动发布**  
-            - 基于 commit `${{ github.sha }}`  
+            **自动发布**
+            - 基于 commit `${{ github.sha }}`
             - 生成时间 (UTC)：${{ steps.date.outputs.RELEASE_DATE }}
           files: artifacts/**/*.zip
         env:
