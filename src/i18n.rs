@@ -5,7 +5,7 @@
 //   A) assets/i18n/<lang>.json
 //   B) assets/i18n.json (single file, format: { "<lang>": { "key": "value" } })
 // - Load order: selected lang -> fallback zh-Hans
-// - Lookup: tr(\"key\") / tr_with(\"key\", [(\"name\", \"...\")]) with {name} placeholders
+// - Lookup: tr("key") / tr_with("key", [("name", "...")]) with {name} placeholders
 //
 // Language selection:
 // - CLI: --lang <code> (e.g. en, zh-Hant, ja, ko, fr, ru, ar)
@@ -13,7 +13,6 @@
 // - Default: zh-Hans
 
 use once_cell::sync::OnceCell;
-use serde::Deserialize;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -46,18 +45,18 @@ fn load_multi_lang_json(path: &Path, lang: &str) -> Option<HashMap<String, Strin
 /// 1) <exe_dir>/assets/i18n/<lang>.json
 /// 2) ./assets/i18n/<lang>.json  (dev working dir)
 fn find_lang_file(lang: &str) -> Option<PathBuf> {
-    let file = format!(\"{}.json\", lang);
+    let file = format!("{}.json", lang);
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join(\"assets\").join(\"i18n\").join(&file);
+            let p = dir.join("assets").join("i18n").join(&file);
             if p.exists() {
                 return Some(p);
             }
         }
     }
 
-    let p = PathBuf::from(\"assets\").join(\"i18n\").join(&file);
+    let p = PathBuf::from("assets").join("i18n").join(&file);
     if p.exists() {
         return Some(p);
     }
@@ -71,14 +70,14 @@ fn find_lang_file(lang: &str) -> Option<PathBuf> {
 fn find_multi_lang_file() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join(\"assets\").join(\"i18n.json\");
+            let p = dir.join("assets").join("i18n.json");
             if p.exists() {
                 return Some(p);
             }
         }
     }
 
-    let p = PathBuf::from(\"assets\").join(\"i18n.json\");
+    let p = PathBuf::from("assets").join("i18n.json");
     if p.exists() {
         return Some(p);
     }
@@ -107,7 +106,7 @@ fn load_lang(lang: &str) -> HashMap<String, String> {
 /// Initialize global i18n. Safe to call multiple times; later calls overwrite current lang maps.
 pub fn init(lang: impl Into<String>) {
     let lang = lang.into();
-    let fallback_lang = \"zh-Hans\".to_string();
+    let fallback_lang = "zh-Hans".to_string();
 
     let map = load_lang(&lang);
     let fallback_map = if lang == fallback_lang {
@@ -156,7 +155,7 @@ pub fn tr(key: &str) -> String {
 pub fn tr_with(key: &str, args: &[(&str, String)]) -> String {
     let mut s = tr(key);
     for (k, v) in args {
-        let placeholder = format!(\"{{{}}}\", k);
+        let placeholder = format!("{{{}}}", k);
         s = s.replace(&placeholder, v);
     }
     s
@@ -167,7 +166,7 @@ pub fn resolve_lang_from_args() -> String {
     // CLI: --lang <code>
     let mut it = std::env::args();
     while let Some(a) = it.next() {
-        if a == \"--lang\" {
+        if a == "--lang" {
             if let Some(v) = it.next() {
                 return v;
             }
@@ -175,11 +174,11 @@ pub fn resolve_lang_from_args() -> String {
     }
 
     // Env: PANORAMA_LANG
-    if let Ok(v) = std::env::var(\"PANORAMA_LANG\") {
+    if let Ok(v) = std::env::var("PANORAMA_LANG") {
         if !v.trim().is_empty() {
             return v;
         }
     }
 
-    \"zh-Hans\".to_string()
+    "zh-Hans".to_string()
 }
