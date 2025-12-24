@@ -11,8 +11,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  APP_NAME: panorama_viewer
 
-# 需要推 tag + 发 Release
 permissions:
   contents: write
 
@@ -59,18 +59,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 安装 stable Rust
+      # 安装 stable Rust + 目标
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # Linux 依赖：glib-sys 需要 glib-2.0.pc（libglib2.0-dev）+ pkg-config
-      - name: Install Linux deps (glib)
+      # Linux 依赖：glib-sys/atk-sys 等需要 pkg-config + *.pc
+      # 说明：
+      # - libglib2.0-dev -> glib-2.0.pc
+      # - libatk1.0-dev  -> atk.pc   （你现在报错缺这个）
+      # 如果你用 gtk-rs（GTK3），强烈建议把 pango/cairo/gtk 也装上，避免继续报缺库。
+      - name: Install Linux deps (glib/atk/gtk stack)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libglib2.0-dev zip
+          sudo apt-get install -y \
+            pkg-config zip \
+            libglib2.0-dev \
+            libatk1.0-dev \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev \
+            libgtk-3-dev
 
       # Release 构建
       - name: Cargo build
@@ -85,21 +96,18 @@ jobs:
           mkdir -p dist
           rel="target/${{ matrix.target }}/release"
 
-          shopt -s nullglob
-          files=()
-          # 主二进制（按你原来的命名）
-          files+=("$rel/panorama_viewer")
-          # 可能存在的动态库/静态库
-          files+=("$rel/"*.so "$rel/"*.dylib "$rel/"*.a "$rel/"*.rlib "$rel/"*.lib)
-
-          # 过滤掉不存在的（nullglob 已处理，但 panorama_viewer 可能缺失则这里显式判断）
-          if [ ! -f "$rel/panorama_viewer" ]; then
-            echo "ERROR: expected binary not found: $rel/panorama_viewer"
+          bin="$rel/${APP_NAME}"
+          if [ ! -f "$bin" ]; then
+            echo "ERROR: expected binary not found: $bin"
             ls -la "$rel" || true
             exit 1
           fi
 
-          zip -j "dist/${{ matrix.artifact_name }}.zip" "${files[@]}"
+          shopt -s nullglob
+          files=("$bin")
+          files+=("$rel/"*.so "$rel/"*.dylib "$rel/"*.a "$rel/"*.rlib "$rel/"*.lib)
+
+          zip -j "dist/${APP_NAME}-${{ matrix.artifact_name }}.zip" "${files[@]}"
 
       # —— 打包：Windows 用 Compress-Archive —— #
       - name: Package (Windows)
@@ -109,7 +117,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           $rel = "target\${{ matrix.target }}\release"
 
-          $bin = Join-Path $rel "panorama_viewer.exe"
+          $bin = Join-Path $rel "${env:APP_NAME}.exe"
           if (!(Test-Path $bin)) {
             Write-Host "ERROR: expected binary not found: $bin"
             Get-ChildItem -Force $rel | Format-Table -AutoSize
@@ -119,23 +127,23 @@ jobs:
           $files = @()
           $files += $bin
 
-          # 常见库文件（存在就打包）
+          # 常见附加文件（存在就打包）
           $patterns = @("*.dll","*.lib","*.pdb")
           foreach ($p in $patterns) {
             $items = Get-ChildItem -Path $rel -Filter $p -File -ErrorAction SilentlyContinue
             if ($items) { $files += $items.FullName }
           }
 
-          $zipPath = "dist\${{ matrix.artifact_name }}.zip"
+          $zipPath = "dist\${env:APP_NAME}-${{ matrix.artifact_name }}.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
           Compress-Archive -Path $files -DestinationPath $zipPath -Force
 
-      # 上传产物供后续 Release 使用
+      # ✅ 上传：artifact 名称、文件名、路径三者一致
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.artifact_name }}.zip
+          name: ${{ env.APP_NAME }}-${{ matrix.artifact_name }}
+          path: dist/${{ env.APP_NAME }}-${{ matrix.artifact_name }}.zip
           retention-days: 30
 
   # —————————————————— 2️⃣  Release —————————————————— #
@@ -150,19 +158,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1) 下载所有产物
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      # 2) 生成 vYYYY-MM-DD
       - name: Set release date
         id: date
         run: |
           echo "RELEASE_DATE=$(date -u +'%Y-%m-%d')" >>"$GITHUB_OUTPUT"
 
-      # 3) 创建并推送 tag（若已存在则跳过创建）
       - name: Create & push tag (if missing)
         env:
           TAG_NAME: v${{ steps.date.outputs.RELEASE_DATE }}
@@ -170,16 +175,14 @@ jobs:
           set -euo pipefail
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name  "github-actions[bot]"
-
           git fetch --tags
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Tag $TAG_NAME already exists, skipping tag creation."
+            echo "Tag $TAG_NAME already exists, skipping."
           else
             git tag "$TAG_NAME"
             git push origin "$TAG_NAME"
           fi
 
-      # 4) 建 Release 并上传全部产物
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v1
         with:
