@@ -5,6 +5,8 @@ on:
     branches: [ master ]          # 只在 master 上持续集成
   pull_request:
     branches: [ master ]
+    paths:
+      - '.github/workflows/rust.yml'
 
 env:
   CARGO_TERM_COLOR: always
