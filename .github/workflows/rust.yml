@@ -2,10 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]          # 只在 master 上持续集成
+    branches: [ main ]          # 只在 master 上持续集成
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
     paths:
+      - 'src/*'
       - '.github/workflows/rust.yml'
 
 env:
